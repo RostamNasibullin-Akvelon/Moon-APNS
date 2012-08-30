@@ -22,13 +22,11 @@ using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
-using NLog;
 
 namespace MoonAPNS
 {
   public class PushNotification
-  {
-    private static readonly Logger Logger = LogManager.GetCurrentClassLogger();
+  {    
     private TcpClient _apnsClient;
     private SslStream _apnsStream;
     private X509Certificate _certificate;
@@ -90,9 +88,38 @@ namespace MoonAPNS
       _errorList.Add(255, "None (unknown)");
     }
 
-    public List<string> SendToApple(List<NotificationPayload> queue)
+    public PushNotification(bool useSandbox, X509Certificate2 p12, string p12FilePassword)
     {
-        Logger.Info("Payload queue received.");
+        if (useSandbox)
+        {
+            _host = SandboxHost;
+            _feedbackHost = SandboxFeedbackHost;
+        }
+        else
+        {
+            _host = ProductionHost;
+            _feedbackHost = ProductionFeedbackHost;
+        }
+
+        //Load Certificates in to collection.
+        _certificate = p12;
+        _certificates = new X509CertificateCollection { _certificate };
+
+        // Loading Apple error response list.
+        _errorList.Add(0, "No errors encountered");
+        _errorList.Add(1, "Processing error");
+        _errorList.Add(2, "Missing device token");
+        _errorList.Add(3, "Missing topic");
+        _errorList.Add(4, "Missing payload");
+        _errorList.Add(5, "Invalid token size");
+        _errorList.Add(6, "Invalid topic size");
+        _errorList.Add(7, "Invalid payload size");
+        _errorList.Add(8, "Invalid token");
+        _errorList.Add(255, "None (unknown)");
+    }
+
+    public List<string> SendToApple(List<NotificationPayload> queue)
+    {        
         _notifications = queue;
         if (queue.Count < 8999)
         {
@@ -133,16 +160,12 @@ namespace MoonAPNS
                 {
                     item.PayloadId = i;
                     byte[] payload = GeneratePayload(item);
-                    _apnsStream.Write(payload);
-                    Logger.Info("Notification successfully sent to APNS server for Device Toekn : " + item.DeviceToken);
+                    _apnsStream.Write(payload);                    
                     Thread.Sleep(1000); //Wait to get the response from apple.
-                }
-                else
-                    Logger.Error("Invalid device token length, possible simulator entry: " + item.DeviceToken);
+                }                
             }
             catch (Exception ex)
             {
-                Logger.Error("An error occurred on sending payload for device token {0} - {1}", item.DeviceToken, ex.Message);
                 _conected = false;
             }
             i++;
@@ -168,22 +191,18 @@ namespace MoonAPNS
 
           payLoadId = Encoding.Default.GetString(ID);
           payLoadIndex = ((int.Parse(payLoadId)) - 1000);
-          Logger.Error("Apple rejected palyload for device token : " + _notifications[payLoadIndex].DeviceToken);
-          Logger.Error("Apple Error code : " + _errorList[status]);
-          Logger.Error("Connection terminated by Apple.");
           _rejected.Add(_notifications[payLoadIndex].DeviceToken);
           _conected = false;
         }
       }
       catch (Exception ex)
       {
-          Logger.Error("An error occurred while reading Apple response for token {0} - {1}", _notifications[payLoadIndex].DeviceToken, ex.Message);
+
       }
     }
 
     private void Connect(string host, int port, X509CertificateCollection certificates)
     {
-      Logger.Info("Connecting to apple server.");
       try
       {
         _apnsClient = new TcpClient();
@@ -191,7 +210,6 @@ namespace MoonAPNS
       }
       catch (SocketException ex)
       {
-          Logger.Error("An error occurred while connecting to APNS servers - " + ex.Message);
       }
 
       var sslOpened = OpenSslStream(host, certificates);
@@ -199,7 +217,6 @@ namespace MoonAPNS
       if (sslOpened)
       {
         _conected = true;
-        Logger.Info("Conected.");
       }
 
     }
@@ -214,17 +231,14 @@ namespace MoonAPNS
         _apnsStream.Dispose();
         _apnsStream = null;
         _conected = false;
-        Logger.Info("Disconnected.");
       }
       catch (Exception ex)
       {
-        Logger.Error("An error occurred while disconnecting. - " + ex.Message);
       }
     }
 
     private bool OpenSslStream(string host, X509CertificateCollection certificates)
     {
-      Logger.Info("Creating SSL connection.");
       _apnsStream = new SslStream(_apnsClient.GetStream(), false, validateServerCertificate, SelectLocalCertificate);
 
       try
@@ -233,19 +247,16 @@ namespace MoonAPNS
       }
       catch (System.Security.Authentication.AuthenticationException ex)
       {
-        Logger.Error(ex.Message);
         return false;
       }
 
       if (!_apnsStream.IsMutuallyAuthenticated)
       {
-        Logger.Error("SSL Stream Failed to Authenticate");
         return false;
       }
 
       if (!_apnsStream.CanWrite)
       {
-        Logger.Error("SSL Stream is not Writable");
         return false;
       }
       return true;
@@ -293,7 +304,6 @@ namespace MoonAPNS
 
       // String length
         string apnMessage = payload.ToJson();
-        Logger.Info("Payload generated for " + payload.DeviceToken + " : " + apnMessage);
 
         byte[] apnMessageLength = BitConverter.GetBytes((Int16) apnMessage.Length);
         Array.Reverse(apnMessageLength);
@@ -307,7 +317,6 @@ namespace MoonAPNS
       }
       catch (Exception ex)
       {
-        Logger.Error("Unable to generate payload - " + ex.Message);
         return null;
       }
     }
@@ -317,7 +326,6 @@ namespace MoonAPNS
       try
       {
         var feedbacks = new List<Feedback>();
-        Logger.Info("Connecting to feedback service.");
 
         if (!_conected)
             Connect(_feedbackHost, FeedbackPort, _certificates);
@@ -331,15 +339,12 @@ namespace MoonAPNS
 
             //Get the first feedback
             recd = _apnsStream.Read(buffer, 0, buffer.Length);
-            Logger.Info("Feedback response received.");
 
             if (recd == 0)
-                Logger.Info("Feedback response is empty.");
 
             //Continue while we have results and are not disposing
             while (recd > 0)
             {
-                Logger.Info("processing feedback response");
                 var fb = new Feedback();
 
                 //Get our seconds since 1970 ?
@@ -380,13 +385,11 @@ namespace MoonAPNS
             //clode the connection here !
             Disconnect();
             if (feedbacks.Count > 0)
-                Logger.Info("Total {0} feedbacks received.", feedbacks.Count);
             return feedbacks;
         }
       }
       catch (Exception ex)
       {
-        Logger.Error("Error occurred on receiving feed back. - " + ex.Message);
         return null;
       }
       return null;
